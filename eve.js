@@ -35,7 +35,7 @@
             var e = events,
                 oldstop = stop,
                 args = Array.prototype.slice.call(arguments, 2),
-                listeners = eve.listeners(name),
+                listeners = eve.listeners(name, scope),
                 z = 0,
                 f = false,
                 l,
@@ -100,10 +100,11 @@
      > Arguments
      **
      - name (string) name of the event, dot (`.`) or slash (`/`) separated
+     - scope (object) optional constraint on the context of the triggered event
      **
      = (array) array of event handlers
     \*/
-    eve.listeners = function (name) {
+    eve.listeners = function (name, scope) {
         var names = name.split(separator),
             e = events,
             item,
@@ -113,6 +114,8 @@
             ii,
             j,
             jj,
+            l,
+            ll,
             nes,
             es = [e],
             out = [];
@@ -126,7 +129,17 @@
                     item = items[k];
                     if (item) {
                         nes.push(item);
-                        out = out.concat(item.f || []);
+                        if (item.f) {
+                            out = out.concat(item.f);
+                        }
+                        if (scope) {
+                            for(l = 0, ll = item.scopes && item.scopes.length; l < ll; l++ ) {
+                                if (item.scopes[l].scope === scope) {
+                                    out = out.concat(item.scopes[l].f);
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -142,11 +155,14 @@
      * Binds given event handler with a given name. You can use wildcards “`*`” for the names:
      | eve.on("*.under.*", f);
      | eve("mouse.under.floor"); // triggers f
+     | eve.on("*.under.*", myObj, f);
+     | eve("mouse.under.floor", myObj); // triggers f
      * Use @eve to trigger the listener.
      **
      > Arguments
      **
      - name (string) name of the event, dot (`.`) or slash (`/`) separated, with optional wildcards
+     - scope (object) optional constraint on the context of the event triggered.
      - f (function) event handler function
      **
      = (function) returned function accepts a single numeric parameter that represents z-index of the handler. It is an optional feature and only used when you need to ensure that some subset of handlers will be invoked in a given order, despite of the order of assignment. 
@@ -158,19 +174,44 @@
      * If you want to put your handler before non-indexed handlers, specify a negative value.
      * Note: I assume most of the time you don’t need to worry about z-index, but it’s nice to have this feature “just in case”.
     \*/
-    eve.on = function (name, f) {
+    eve.on = function (name, scope, f) {
         var names = name.split(separator),
-            e = events;
-        for (var i = 0, ii = names.length; i < ii; i++) {
+            e = events,
+            funcList;
+
+        if (!f) {
+            f = scope;
+            scope = undefined;
+        }
+
+        for (var i = 0, ii = names.length; i < ii; i++) { // get or create namespace
             e = e.n;
             !e[names[i]] && (e[names[i]] = {n: {}});
             e = e[names[i]];
         }
-        e.f = e.f || [];
-        for (i = 0, ii = e.f.length; i < ii; i++) if (e.f[i] == f) {
+
+        if (scope) {
+            e.scopes || (e.scopes = []);
+
+            for (i = 0, ii = e.scopes.length; i < ii; i++) if (e.scopes[i].scope === scope) {
+                funcList = e.scopes[i].f;
+                break;
+            }
+            if (i >= ii) { // create scope if not found
+                e.scopes.push({
+                    scope : scope,
+                    f : funcList = []
+                });
+            }
+        } else {
+            funcList = e.f = e.f || [];
+        }
+
+        for (i = 0, ii = funcList.length; i < ii; i++) if (funcList[i] == f) {
             return fun;
         }
-        e.f.push(f);
+
+        funcList.push(f);
         return function (zIndex) {
             if (+zIndex == +zIndex) {
                 f.zIndex = +zIndex;
@@ -206,6 +247,57 @@
         }
         return current_event;
     };
+
+    //remove a specific function from an array of functions
+    function unbindForFuncList(funcList, f) {
+        for (var i = 0, ii = funcList.length; i < ii; i++) if (funcList[i] == f) {
+            funcList.splice(i, 1);
+            break;
+        }
+    }
+
+    // unbind a given namespace. scope and function constraints are required, but are ignored if falsy.
+    // child namespaaces will also be unbound, using the same scope and function constraints.
+    function unbindAtNamespace(namespace, scope, f) {
+        var e = namespace,
+            i,
+            ii;
+        if (f) { // unbind single handler
+            for (i = 0, ii = e.scopes && e.scopes.length; i < ii; i++) {
+                if (!scope || e.scopes[i].scope === scope) { // if they didn't provide a scope, we unbind every scope. if they provided one, only unbind that one.
+                    unbindForFuncList(e.scopes[i].f, f);
+                    !e.scopes[i].f.length && e.scopes.splice(i, 1);
+                    break;
+                }
+            }
+            if (e.f && !scope) { // unbind unscoped handlers only if no scope was provided.
+                unbindForFuncList(e.f, f);
+                for (i = 0, ii = e.f.length; i < ii; i++) if (e.f[i] == f) {
+                    e.f.splice(i, 1);
+                    !e.f.length && delete e.f;
+                    break;
+                }
+            }
+        } else if (scope) { // unbind all for scope
+            for (i = 0, ii = e.scopes && e.scopes.length; i < ii; i++) {
+                if (e.scopes[i] === scope) {
+                    e.scopes.splice(i, 1);
+                    break;
+                }
+            }
+        } else { // unbind all handlers in this namespace and in sub-namespaces
+            delete e.f;
+            delete e.scopes;
+            e.n = {};
+            return; // we're done recursing.
+        }
+
+        //apply same logic to nested namespaces
+        for (key in e.n) if (e.n[has](key)) {
+            unbindAtNamespace(e.n[key], scope, f);
+        }
+    }
+
     /*\
      * eve.unbind
      [ method ]
@@ -217,13 +309,20 @@
      - name (string) name of the event, dot (`.`) or slash (`/`) separated, with optional wildcards
      - f (function) event handler function
     \*/
-    eve.unbind = function (name, f) {
+    eve.unbind = function (name, scope, f) {
         var names = name.split(separator),
             e,
             key,
             splice,
             i, ii, j, jj,
             cur = [events];
+
+        if (!f) {
+            f = scope;
+            scope = undefined;
+        }
+
+        // collect all the namespaces specified by the name parameter
         for (i = 0, ii = names.length; i < ii; i++) {
             for (j = 0; j < cur.length; j += splice.length - 2) {
                 splice = [j, 1];
@@ -240,33 +339,10 @@
                 cur.splice.apply(cur, splice);
             }
         }
+
+        // remove handlers from the collected namespaces
         for (i = 0, ii = cur.length; i < ii; i++) {
-            e = cur[i];
-            while (e.n) {
-                if (f) {
-                    if (e.f) {
-                        for (j = 0, jj = e.f.length; j < jj; j++) if (e.f[j] == f) {
-                            e.f.splice(j, 1);
-                            break;
-                        }
-                        !e.f.length && delete e.f;
-                    }
-                    for (key in e.n) if (e.n[has](key) && e.n[key].f) {
-                        var funcs = e.n[key].f;
-                        for (j = 0, jj = funcs.length; j < jj; j++) if (funcs[j] == f) {
-                            funcs.splice(j, 1);
-                            break;
-                        }
-                        !funcs.length && delete e.n[key].f;
-                    }
-                } else {
-                    delete e.f;
-                    for (key in e.n) if (e.n[has](key) && e.n[key].f) {
-                        delete e.n[key].f;
-                    }
-                }
-                e = e.n;
-            }
+            unbindAtNamespace(cur[i], scope, f);
         }
     };
     /*\
@@ -286,13 +362,17 @@
      **
      = (function) same return function as @eve.on
     \*/
-    eve.once = function (name, f) {
+    eve.once = function (name, scope, f) {
+        if (!f) {
+            f = scope;
+            scope = undefined;
+        }
         var f2 = function () {
             var res = f.apply(this, arguments);
-            eve.unbind(name, f2);
+            eve.unbind(name, scope, f2);
             return res;
         };
-        return eve.on(name, f2);
+        return eve.on(name, scope, f2);
     };
     /*\
      * eve.version

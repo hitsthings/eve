@@ -60,9 +60,9 @@
         eve.once("hit", f5 = function () {
             log("   You scoundrel!");
         })(-1);
-        //eve.on("hit/chest", Chester, f6 = function() {
-        //    log("   Chester took a chester!");
-        //});
+        eve.on("hit/chest", Chester, f6 = function() {
+            log("   Chester took a chester!");
+        });
         
         // fire events
         logAndExpect("In your face!");
@@ -83,7 +83,7 @@
         eve("hit/chest/leg/shin", Chester);
         expect("   I’m hit!");
         expect("   Oh, my chest!");
-        //expect("   Chester took a chester!");
+        expect("   Chester took a chester!");
         expect("   Ouch!");
 
 
@@ -94,7 +94,7 @@
         logAndExpect("Take that!");
         eve("hit.chest.leg", Chester);
         expect("   I’m hit!");
-        //expect("   Chester took a chester!");
+        expect("   Chester took a chester!");
         expect("   Ouch!");
 
         // Unbinding by wildcard
